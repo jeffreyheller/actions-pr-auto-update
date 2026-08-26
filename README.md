@@ -59,6 +59,8 @@ jobs:
                   limit: 10
                   # Include open drafts in the update set (default: false).
                   include_drafts: true
+                  # Include PRs opened by bots and GitHub Apps (default: false).
+                  include_bots: true
                   # Comma-separated. If set, at least one match is required to update a PR.
                   include_labels: "update,update me"
                   # Comma-separated. If set, any match causes a PR to be skipped.
@@ -97,8 +99,27 @@ Defined in [`action.yml`](action.yml).
 | `token`          | Token used to perform API calls. Requires `pull-requests:write` access.                                                              | `github.token` |
 | `limit`          | Max number of pull requests to update per run. Pull requests are sorted by last updated date; the rest are deferred to the next run. | `100`          |
 | `include_drafts` | Whether to include draft pull requests.                                                                                              | `false`        |
+| `include_bots`   | Whether to include pull requests opened by bots and GitHub Apps. See the note below.                                                 | `false`        |
 | `include_labels` | Comma-separated list of labels. If set, at least one **must** be present on the pull request for it to be updated.                   |                |
 | `exclude_labels` | Comma-separated list of labels. If set, any match causes the pull request to be skipped.                                             |                |
+
+### A note on `include_bots`
+
+Bot pull requests are skipped by default, and that default is right for the
+common case: Dependabot and Renovate keep their own branches current, so
+updating them is redundant.
+
+It is wrong for a bot that opens a pull request and then leaves it alone — a
+release bot, or an automation that commits a generated file and walks away.
+Those are the pull requests that go stale under **Require branches to be up to
+date before merging** with nothing to fix them, because the author is not a
+person who will click *Update branch*. This covers GitHub Apps too: a PR opened
+with an App installation token is authored by `<app-slug>[bot]` with
+`user.type === "Bot"`, so no bot-login list is involved.
+
+Set `include_bots: true` for that case. The other filters still apply, so
+`include_labels` and `exclude_labels` remain available to narrow which bot pull
+requests are eligible.
 
 Have ideas for additional features? [Open an issue](https://github.com/allonsy-studio/actions-pr-auto-update/issues/new).
 
@@ -112,7 +133,7 @@ Have ideas for additional features? [Open an issue](https://github.com/allonsy-s
 ## How it works
 
 1. **List** open pull requests targeting the pushed branch, paginated (100/page), sorted by most recently updated.
-2. **Filter** each PR: skip bots (Dependabot + any `user.type === "Bot"`), drafts (unless `include_drafts: true`), and label include/exclude rules.
+2. **Filter** each PR: skip bots (Dependabot + any `user.type === "Bot"`) unless `include_bots: true`, drafts (unless `include_drafts: true`), and label include/exclude rules.
 3. **Update in parallel** — calls GitHub's [Update pull request branch](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch) API for each survivor, passing `expected_head_sha` for safety against concurrent pushes.
 4. **Report** outputs (`updated`, `failed`) and write a markdown step summary to the workflow run.
 5. **Fail loud** if every update fails, but allow partial-failure runs to succeed (so one stale PR doesn't tank the rest).

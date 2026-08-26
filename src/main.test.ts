@@ -71,6 +71,7 @@ function setInputs(map: Record<string, string>) {
 	(core as any).__setInputs({
 		limit: "100",
 		include_drafts: "false",
+		include_bots: "false",
 		include_labels: "",
 		exclude_labels: "",
 		...map,
@@ -168,6 +169,33 @@ describe("run", () => {
 		it("skips bot pull requests (by user.type and by known login)", async () => {
 			const client = makeClient({
 				pages: [[pr({ number: 1, user: { login: "octobot", type: "Bot" } }), pr({ number: 2, user: { login: "dependabot[bot]", type: "User" } }), pr({ number: 3 })]],
+			});
+			await run(client, makeContext());
+
+			expect(client.rest.pulls.updateBranch).toHaveBeenCalledTimes(1);
+			expect(client.rest.pulls.updateBranch).toHaveBeenCalledWith(expect.objectContaining({ pull_number: 3 }));
+		});
+
+		it("includes bot and GitHub App pull requests when include_bots is true", async () => {
+			setInputs({ include_bots: "true" });
+			const client = makeClient({
+				pages: [[pr({ number: 1, user: { login: "octobot", type: "Bot" } }), pr({ number: 2, user: { login: "dependabot[bot]", type: "User" } }), pr({ number: 3 })]],
+			});
+			await run(client, makeContext());
+
+			expect(client.rest.pulls.updateBranch).toHaveBeenCalledTimes(3);
+		});
+
+		it("still applies the other filters to bot pull requests when include_bots is true", async () => {
+			setInputs({ include_bots: "true", exclude_labels: "no-update" });
+			const client = makeClient({
+				pages: [
+					[
+						pr({ number: 1, user: { login: "octobot", type: "Bot" }, labels: [{ name: "no-update" }] }),
+						pr({ number: 2, user: { login: "octobot", type: "Bot" }, draft: true }),
+						pr({ number: 3, user: { login: "octobot", type: "Bot" } }),
+					],
+				],
 			});
 			await run(client, makeContext());
 

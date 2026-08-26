@@ -63,13 +63,14 @@ export default async function run(client: Octokit, context: typeof Context): Pro
 	const rawLimit = core.getInput("limit");
 	const limit = rawLimit ? Math.max(1, Number.parseInt(rawLimit, 10)) : 100;
 	const includeDrafts = core.getBooleanInput("include_drafts");
+	const includeBots = core.getBooleanInput("include_bots");
 	const allowLabels = parseInput("include_labels");
 	const denyLabels = parseInput("exclude_labels");
 
 	core.info(`Searching for open pull requests targeting ${baseBranch} (limit: ${limit}).`);
 
 	const passesFilters = (pr: PullRequest): boolean => {
-		if (isBot(pr)) {
+		if (!includeBots && isBot(pr)) {
 			core.info(`Skipping ${describe(pr)}: bot pull request.`);
 			return false;
 		}

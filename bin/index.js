@@ -23822,11 +23822,12 @@ async function run(client2, context3) {
   const rawLimit = getInput("limit");
   const limit = rawLimit ? Math.max(1, Number.parseInt(rawLimit, 10)) : 100;
   const includeDrafts = getBooleanInput("include_drafts");
+  const includeBots = getBooleanInput("include_bots");
   const allowLabels = parseInput("include_labels");
   const denyLabels = parseInput("exclude_labels");
   info(`Searching for open pull requests targeting ${baseBranch} (limit: ${limit}).`);
   const passesFilters = (pr) => {
-    if (isBot(pr)) {
+    if (!includeBots && isBot(pr)) {
       info(`Skipping ${describe(pr)}: bot pull request.`);
       return false;
     }
