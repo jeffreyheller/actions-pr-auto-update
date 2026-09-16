@@ -30,6 +30,8 @@ outputs:
         description: "The number of pull requests that were successfully updated."
     failed:
         description: "The number of pull requests that failed to update. This may be due to rate limiting, invalid tokens, or other issues. A failed pull request will not be retried."
+    skipped:
+        description: "The number of pull requests that could not be updated because their head conflicts with the base. A conflicted pull request cannot be merged non-interactively by any caller, so it is reported rather than counted as a failure, and it does not fail the run."
 
 runs:
     using: node24

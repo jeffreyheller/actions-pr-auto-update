@@ -129,13 +129,26 @@ Have ideas for additional features? [Open an issue](https://github.com/allonsy-s
 | --------- | -------------------------------------------------- |
 | `updated` | The number of pull requests that were updated.     |
 | `failed`  | The number of pull requests that failed to update. |
+| `skipped` | The number of pull requests skipped because their head conflicts with the base. |
 
 ## How it works
 
 1. **List** open pull requests targeting the pushed branch, paginated (100/page), sorted by most recently updated.
 2. **Filter** each PR: skip bots (Dependabot + any `user.type === "Bot"`) unless `include_bots: true`, drafts (unless `include_drafts: true`), and label include/exclude rules.
 3. **Update in parallel** — calls GitHub's [Update pull request branch](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch) API for each survivor, passing `expected_head_sha` for safety against concurrent pushes.
-4. **Report** outputs (`updated`, `failed`) and write a markdown step summary to the workflow run.
+4. **Report** outputs (`updated`, `failed`, `skipped`) and write a markdown step summary to the workflow run.
+
+### Conflicted pull requests are skipped, not failed
+
+`update-branch` performs a merge, so a pull request whose head conflicts with the
+base cannot be updated by any caller. That is a fact about the pull request —
+already shown on it as a conflict banner — not a failure of this action, so it is
+counted in `skipped` and does not fail the run.
+
+This matters when a conflicted pull request is the only candidate. Counting it as
+a failure turns "nothing was updatable" into a red run, and one permanently stale
+branch then keeps the run red forever, burying the breakage only this action can
+report: a bad token, a rate limit, a 5xx. Those still fail the run.
 5. **Fail loud** if every update fails, but allow partial-failure runs to succeed (so one stale PR doesn't tank the rest).
 
 ## Versioning

@@ -35,15 +35,17 @@ function describe(pr: PullRequest): string {
 	return `#${pr.number} ${pr.title}`;
 }
 
-function report(updated: number, failed: number): void {
+function report(updated: number, failed: number, skipped = 0): void {
 	core.setOutput("updated", updated);
 	core.setOutput("failed", failed);
+	core.setOutput("skipped", skipped);
 }
 
 interface UpdateResult {
 	pr: PullRequest;
 	ok: boolean;
 	message?: string;
+	conflicted?: boolean;
 }
 
 /**
@@ -134,15 +136,44 @@ export default async function run(client: Octokit, context: typeof Context): Pro
 
 	results.sort((a, b) => a.pr.number - b.pr.number);
 
+	// A pull request whose head conflicts with the base cannot be updated by any
+	// caller: update-branch performs a merge, and a conflicted merge has no
+	// non-interactive resolution. That is a fact about the pull request — already
+	// shown on it as a conflict banner — not a failure of this action, so it is
+	// counted separately rather than failing the run. The distinction bites when a
+	// conflicted pull request is the ONLY candidate: counting it as a failure
+	// turns "nothing was updatable" into a red run, and a permanently stale branch
+	// then keeps the run red forever, burying the breakage only this action can
+	// report (bad token, rate limit, 5xx).
+	//
+	// Only failures are re-queried — `mergeable_state` is absent from the list
+	// response — so the cost is bounded by the failure count, not the PR count. A
+	// lookup that itself fails leaves the result classified as a failure: unknown
+	// stays loud.
+	await Promise.all(
+		results
+			.filter((r) => !r.ok)
+			.map(async (r) => {
+				try {
+					const { data } = await client.rest.pulls.get({ ...context.repo, pull_number: r.pr.number });
+					r.conflicted = data.mergeable_state === "dirty";
+				} catch {
+					r.conflicted = false;
+				}
+			}),
+	);
+
 	const passed = results.filter((r) => r.ok);
-	const failed = results.filter((r) => !r.ok);
+	const conflicted = results.filter((r) => !r.ok && r.conflicted);
+	const failed = results.filter((r) => !r.ok && !r.conflicted);
 
 	for (const r of results) {
-		const status = r.ok ? "✅" : "❌";
+		const status = r.ok ? "✅" : r.conflicted ? "⏭️" : "❌";
 		const detail = r.message ? ` — ${r.message}` : "";
-		core.info(`${status} ${describe(r.pr)}${detail}`);
+		const suffix = r.conflicted ? " (conflicted; resolve on the pull request)" : "";
+		core.info(`${status} ${describe(r.pr)}${detail}${suffix}`);
 	}
-	core.info(`Summary: ${passed.length} succeeded, ${failed.length} failed.`);
+	core.info(`Summary: ${passed.length} succeeded, ${conflicted.length} skipped as conflicted, ${failed.length} failed.`);
 
 	if (process.env.GITHUB_STEP_SUMMARY) {
 		await core.summary
@@ -150,17 +181,16 @@ export default async function run(client: Octokit, context: typeof Context): Pro
 			.addRaw(`Attempted ${results.length} update${results.length === 1 ? "" : "s"} against \`${baseBranch}\`.`)
 			.addList(
 				results.map((r) => {
-					const status = r.ok ? "✅" : "❌";
+					const status = r.ok ? "✅" : r.conflicted ? "⏭️" : "❌";
 					const detail = r.message ? ` — ${r.message}` : "";
 					return `${status} #${r.pr.number} ${r.pr.title}${detail}`;
 				}),
 			)
-			.addRaw(`\n**${passed.length}** succeeded · **${failed.length}** failed`)
+			.addRaw(`\n**${passed.length}** succeeded · **${conflicted.length}** skipped as conflicted · **${failed.length}** failed`)
 			.write();
 	}
 
-	core.setOutput("updated", passed.length);
-	core.setOutput("failed", failed.length);
+	report(passed.length, failed.length, conflicted.length);
 
 	if (failed.length > 0 && passed.length === 0) {
 		core.setFailed(`All ${failed.length} pull request updates failed.`);

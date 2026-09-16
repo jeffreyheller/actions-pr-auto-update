@@ -23808,9 +23808,10 @@ function isBot(pr) {
 function describe(pr) {
   return `#${pr.number} ${pr.title}`;
 }
-function report(updated, failed) {
+function report(updated, failed, skipped = 0) {
   setOutput("updated", updated);
   setOutput("failed", failed);
+  setOutput("skipped", skipped);
 }
 async function run(client2, context3) {
   if (context3.eventName === "delete") {
@@ -23884,26 +23885,37 @@ async function run(client2, context3) {
     })
   );
   results.sort((a, b) => a.pr.number - b.pr.number);
+  await Promise.all(
+    results.filter((r) => !r.ok).map(async (r) => {
+      try {
+        const { data } = await client2.rest.pulls.get({ ...context3.repo, pull_number: r.pr.number });
+        r.conflicted = data.mergeable_state === "dirty";
+      } catch {
+        r.conflicted = false;
+      }
+    })
+  );
   const passed = results.filter((r) => r.ok);
-  const failed = results.filter((r) => !r.ok);
+  const conflicted = results.filter((r) => !r.ok && r.conflicted);
+  const failed = results.filter((r) => !r.ok && !r.conflicted);
   for (const r of results) {
-    const status = r.ok ? "\u2705" : "\u274C";
+    const status = r.ok ? "\u2705" : r.conflicted ? "\u23ED\uFE0F" : "\u274C";
     const detail = r.message ? ` \u2014 ${r.message}` : "";
-    info(`${status} ${describe(r.pr)}${detail}`);
+    const suffix = r.conflicted ? " (conflicted; resolve on the pull request)" : "";
+    info(`${status} ${describe(r.pr)}${detail}${suffix}`);
   }
-  info(`Summary: ${passed.length} succeeded, ${failed.length} failed.`);
+  info(`Summary: ${passed.length} succeeded, ${conflicted.length} skipped as conflicted, ${failed.length} failed.`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     await summary.addHeading("Auto-update pull requests", 2).addRaw(`Attempted ${results.length} update${results.length === 1 ? "" : "s"} against \`${baseBranch}\`.`).addList(
       results.map((r) => {
-        const status = r.ok ? "\u2705" : "\u274C";
+        const status = r.ok ? "\u2705" : r.conflicted ? "\u23ED\uFE0F" : "\u274C";
         const detail = r.message ? ` \u2014 ${r.message}` : "";
         return `${status} #${r.pr.number} ${r.pr.title}${detail}`;
       })
     ).addRaw(`
-**${passed.length}** succeeded \xB7 **${failed.length}** failed`).write();
+**${passed.length}** succeeded \xB7 **${conflicted.length}** skipped as conflicted \xB7 **${failed.length}** failed`).write();
   }
-  setOutput("updated", passed.length);
-  setOutput("failed", failed.length);
+  report(passed.length, failed.length, conflicted.length);
   if (failed.length > 0 && passed.length === 0) {
     setFailed(`All ${failed.length} pull request updates failed.`);
   }

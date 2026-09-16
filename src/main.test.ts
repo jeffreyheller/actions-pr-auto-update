@@ -45,6 +45,7 @@ function makeClient(
 		pages?: MockPR[][];
 		updateBranch?: ReturnType<typeof jest.fn>;
 		iterator?: ReturnType<typeof jest.fn>;
+		get?: ReturnType<typeof jest.fn>;
 	} = {},
 ) {
 	const pages = opts.pages ?? [[]];
@@ -61,6 +62,10 @@ function makeClient(
 			pulls: {
 				list,
 				updateBranch: opts.updateBranch ?? jest.fn<(...args: any[]) => any>().mockResolvedValue({ status: 202, data: {} }),
+				// Only consulted for pull requests whose update failed, to tell a
+				// conflict apart from a real failure. `clean` keeps a plain failure a
+				// failure, which is what the pre-existing tests assert.
+				get: opts.get ?? jest.fn<(...args: any[]) => any>().mockResolvedValue({ data: { mergeable_state: "clean" } }),
 			},
 		},
 		paginate: { iterator },
@@ -305,6 +310,61 @@ describe("run", () => {
 			expect(core.setOutput).toHaveBeenCalledWith("updated", 0);
 			expect(core.setOutput).toHaveBeenCalledWith("failed", 2);
 			expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining("All 2"));
+		});
+
+		it("skips a conflicted pull request instead of failing the run", async () => {
+			// The regression this exists for, measured on remotelock/ops-v2: PR #408
+			// sat conflicted from 2026-08-27, was the ONLY behind pull request, and so
+			// reddened every run — 10 of 20 — until it was resolved by hand.
+			const updateBranch = jest.fn<(...args: any[]) => any>().mockRejectedValue(new Error("merge conflict between base and head"));
+			const get = jest.fn<(...args: any[]) => any>().mockResolvedValue({ data: { mergeable_state: "dirty" } });
+			const client = makeClient({ pages: [[pr({ number: 1 })]], updateBranch, get });
+			await run(client, makeContext());
+
+			expect(core.setOutput).toHaveBeenCalledWith("updated", 0);
+			expect(core.setOutput).toHaveBeenCalledWith("failed", 0);
+			expect(core.setOutput).toHaveBeenCalledWith("skipped", 1);
+			expect(core.setFailed).not.toHaveBeenCalled();
+		});
+
+		it("still fails the run when the only candidate fails for a non-conflict reason", async () => {
+			// The other half of the guard: reclassifying conflicts must not swallow a
+			// bad token, a rate limit or a 5xx. Delete the `mergeable_state` check and
+			// this is the test that goes red.
+			const updateBranch = jest.fn<(...args: any[]) => any>().mockRejectedValue(new Error("Bad credentials"));
+			const get = jest.fn<(...args: any[]) => any>().mockResolvedValue({ data: { mergeable_state: "clean" } });
+			const client = makeClient({ pages: [[pr({ number: 1 })]], updateBranch, get });
+			await run(client, makeContext());
+
+			expect(core.setOutput).toHaveBeenCalledWith("skipped", 0);
+			expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining("All 1"));
+		});
+
+		it("updates what it can while a conflicted pull request is present", async () => {
+			const updateBranch = jest
+				.fn<(...args: any[]) => any>()
+				.mockResolvedValueOnce({ status: 202, data: {} })
+				.mockRejectedValueOnce(new Error("merge conflict between base and head"));
+			const get = jest.fn<(...args: any[]) => any>().mockResolvedValue({ data: { mergeable_state: "dirty" } });
+			const client = makeClient({ pages: [[pr({ number: 1 }), pr({ number: 2 })]], updateBranch, get });
+			await run(client, makeContext());
+
+			expect(client.rest.pulls.updateBranch).toHaveBeenCalledTimes(2);
+			expect(core.setOutput).toHaveBeenCalledWith("updated", 1);
+			expect(core.setOutput).toHaveBeenCalledWith("failed", 0);
+			expect(core.setOutput).toHaveBeenCalledWith("skipped", 1);
+			expect(core.setFailed).not.toHaveBeenCalled();
+		});
+
+		it("counts a pull request as failed when its mergeability cannot be read", async () => {
+			// Unknown stays loud: a lookup failure must not be read as "conflicted".
+			const updateBranch = jest.fn<(...args: any[]) => any>().mockRejectedValue(new Error("merge conflict between base and head"));
+			const get = jest.fn<(...args: any[]) => any>().mockRejectedValue(new Error("404"));
+			const client = makeClient({ pages: [[pr({ number: 1 })]], updateBranch, get });
+			await run(client, makeContext());
+
+			expect(core.setOutput).toHaveBeenCalledWith("skipped", 0);
+			expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining("All 1"));
 		});
 
 		it("treats non-202 responses as failure", async () => {
