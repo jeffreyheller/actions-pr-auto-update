@@ -147,8 +147,15 @@ request or the token rather than a breakage:
 | Outcome | Why it is not a failure |
 | --- | --- |
 | **Already up to date** — `422 There are no new commits on the base branch` | The end state this action exists to reach. |
-| **Conflicted** — `mergeable_state: dirty` | `update-branch` performs a merge, and a conflicted merge has no non-interactive resolution by any caller. Already shown on the pull request as a conflict banner. |
-| **Needs `workflows` scope** | A GitHub App cannot update a pull request touching `.github/workflows/**` without that scope. Permanent for as long as the pull request is open. |
+| **Conflicted** — `mergeable_state: dirty` | `update-branch` performs a merge, and a conflicted merge has no non-interactive resolution by any caller, and it is already shown on the pull request as a conflict banner. |
+
+Note what is **not** on that list: a pull request this action cannot update but
+which is otherwise mergeable — a GitHub App refused `workflows` scope on a branch
+touching `.github/workflows/**`, say. That one still fails the run. Under a base
+branch with `strict: true` an un-updated branch cannot merge at all, so silencing
+the refusal would leave the pull request permanently stuck with nothing saying
+so. "Does not need updating" and "cannot be updated" are different, and only the
+first is harmless.
 
 This matters most when such a pull request is the only candidate. Counting it as
 a failure turns "nothing was updatable" into a red run, and one permanently stale

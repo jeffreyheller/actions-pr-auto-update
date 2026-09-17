@@ -24435,8 +24435,7 @@ function report(updated, failed, skipped = 0) {
   setOutput("skipped", skipped);
 }
 var NOT_A_FAILURE = [
-  [/no new commits on the base branch/i, "already up to date"],
-  [/without `?workflows`? permission/i, "needs `workflows` token scope; update it by hand"]
+  [/no new commits on the base branch/i, "already up to date"]
 ];
 function classify(message) {
   if (!message) return void 0;

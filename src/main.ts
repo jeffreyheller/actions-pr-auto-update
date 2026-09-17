@@ -55,22 +55,24 @@ interface UpdateResult {
 /**
  * Outcomes that are not failures, read off the error the API returned.
  *
- * `updateBranch` rejects for both of these, and counting a rejection as a failure
- * is what turns a run red with nothing wrong:
+ * `updateBranch` rejects for this, and counting the rejection as a failure is what
+ * turns a run red with nothing wrong:
  *
  *   * ALREADY CURRENT — 422 "There are no new commits on the base branch". The
  *     pull request is already up to date, which is the end state this action
  *     exists to reach. Measured on remotelock/ops-v2 2026-09-17: a run over six
  *     pull requests reported `0 succeeded, 5 failed` where four of the five were
  *     this, so every newly-opened pull request was born with a red check.
- *   * WORKFLOW SCOPE — a GitHub App cannot update a pull request that touches
- *     `.github/workflows/**` unless its token carries `workflows`. That is a fact
- *     about the token, permanent for as long as the pull request is open, and no
- *     more resolvable by this action than a conflict is.
+ *
+ * DELIBERATELY NOT HERE: a GitHub App refused `workflows` scope. That one keeps
+ * failing the run, because the pull request is STUCK — a base branch with
+ * `strict: true` will not merge a branch that is behind, so a refusal that nobody
+ * is told about is a pull request that can never merge. "Cannot be updated" and
+ * "does not need updating" are not the same thing, and only the second is
+ * harmless.
  */
 const NOT_A_FAILURE: ReadonlyArray<readonly [RegExp, string]> = [
 	[/no new commits on the base branch/i, "already up to date"],
-	[/without `?workflows`? permission/i, "needs `workflows` token scope; update it by hand"],
 ];
 
 function classify(message: string | undefined): string | undefined {

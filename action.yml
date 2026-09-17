@@ -31,7 +31,7 @@ outputs:
     failed:
         description: "The number of pull requests that failed to update. This may be due to rate limiting, invalid tokens, or other issues. A failed pull request will not be retried."
     skipped:
-        description: "The number of pull requests that could not be updated for a reason that is not a failure: already up to date, head conflicts with the base, or a GitHub App token without `workflows` scope on a pull request touching a workflow. None has a non-interactive resolution by this caller, so each is reported rather than counted as a failure, and none fails the run."
+        description: "The number of pull requests that did not need updating or cannot be merged anyway: already up to date, or head conflicts with the base. Neither leaves the pull request stuck in a way this run should report, so neither fails it. A pull request that CANNOT be updated but could otherwise merge — an App refused `workflows` scope, say — still fails the run, because nothing else would say so."
 
 runs:
     using: node24

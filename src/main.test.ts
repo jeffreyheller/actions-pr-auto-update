@@ -377,26 +377,6 @@ describe("run", () => {
 			expect(get).not.toHaveBeenCalled();
 		});
 
-		it("does not fail the run when an App lacks the workflows scope", async () => {
-			// A GitHub App cannot update a pull request touching `.github/workflows/**`
-			// without `workflows` on its token. That is permanent for as long as the
-			// pull request is open — no more resolvable by this action than a conflict
-			// — so it reddened every run while such a pull request was open.
-			const updateBranch = jest
-				.fn<(...args: any[]) => any>()
-				.mockRejectedValue(
-					new Error("refusing to allow a GitHub App to create or update workflow `.github/workflows/terraform.yml` without `workflows` permission"),
-				);
-			const get = jest.fn<(...args: any[]) => any>();
-			const client = makeClient({ pages: [[pr({ number: 1 })]], updateBranch, get });
-			await run(client, makeContext());
-
-			expect(core.setOutput).toHaveBeenCalledWith("failed", 0);
-			expect(core.setOutput).toHaveBeenCalledWith("skipped", 1);
-			expect(core.setFailed).not.toHaveBeenCalled();
-			expect(get).not.toHaveBeenCalled();
-		});
-
 		it("counts a pull request as failed when its mergeability cannot be read", async () => {
 			// Unknown stays loud: a lookup failure must not be read as "conflicted".
 			const updateBranch = jest.fn<(...args: any[]) => any>().mockRejectedValue(new Error("merge conflict between base and head"));
