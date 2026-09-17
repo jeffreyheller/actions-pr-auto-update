@@ -129,7 +129,7 @@ Have ideas for additional features? [Open an issue](https://github.com/allonsy-s
 | --------- | -------------------------------------------------- |
 | `updated` | The number of pull requests that were updated.     |
 | `failed`  | The number of pull requests that failed to update. |
-| `skipped` | The number of pull requests skipped because their head conflicts with the base. |
+| `skipped` | The number of pull requests that could not be updated for a reason that is not a failure — see below. |
 
 ## How it works
 
@@ -138,17 +138,27 @@ Have ideas for additional features? [Open an issue](https://github.com/allonsy-s
 3. **Update in parallel** — calls GitHub's [Update pull request branch](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch) API for each survivor, passing `expected_head_sha` for safety against concurrent pushes.
 4. **Report** outputs (`updated`, `failed`, `skipped`) and write a markdown step summary to the workflow run.
 
-### Conflicted pull requests are skipped, not failed
+### Not every un-updated pull request is a failure
 
-`update-branch` performs a merge, so a pull request whose head conflicts with the
-base cannot be updated by any caller. That is a fact about the pull request —
-already shown on it as a conflict banner — not a failure of this action, so it is
-counted in `skipped` and does not fail the run.
+Three outcomes are counted in `skipped` rather than `failed`, because in each the
+pull request cannot be updated by this action and that is a fact about the pull
+request or the token rather than a breakage:
 
-This matters when a conflicted pull request is the only candidate. Counting it as
+| Outcome | Why it is not a failure |
+| --- | --- |
+| **Already up to date** — `422 There are no new commits on the base branch` | The end state this action exists to reach. |
+| **Conflicted** — `mergeable_state: dirty` | `update-branch` performs a merge, and a conflicted merge has no non-interactive resolution by any caller. Already shown on the pull request as a conflict banner. |
+| **Needs `workflows` scope** | A GitHub App cannot update a pull request touching `.github/workflows/**` without that scope. Permanent for as long as the pull request is open. |
+
+This matters most when such a pull request is the only candidate. Counting it as
 a failure turns "nothing was updatable" into a red run, and one permanently stale
 branch then keeps the run red forever, burying the breakage only this action can
-report: a bad token, a rate limit, a 5xx. Those still fail the run.
+report: a bad token, a rate limit, a 5xx. Those still fail the run, and so does a
+pull request whose mergeability cannot be read — unknown stays loud.
+
+The first and third are read off the error the API already returned, so they cost
+no extra call; only a still-unexplained failure is re-queried for
+`mergeable_state`.
 5. **Fail loud** if every update fails, but allow partial-failure runs to succeed (so one stale PR doesn't tank the rest).
 
 ## Versioning

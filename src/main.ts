@@ -45,7 +45,37 @@ interface UpdateResult {
 	pr: PullRequest;
 	ok: boolean;
 	message?: string;
-	conflicted?: boolean;
+	/**
+	 * Why this pull request was not updated AND that is not a failure of this
+	 * action. `undefined` on a failure means exactly that: unknown stays loud.
+	 */
+	skipped?: string;
+}
+
+/**
+ * Outcomes that are not failures, read off the error the API returned.
+ *
+ * `updateBranch` rejects for both of these, and counting a rejection as a failure
+ * is what turns a run red with nothing wrong:
+ *
+ *   * ALREADY CURRENT — 422 "There are no new commits on the base branch". The
+ *     pull request is already up to date, which is the end state this action
+ *     exists to reach. Measured on remotelock/ops-v2 2026-09-17: a run over six
+ *     pull requests reported `0 succeeded, 5 failed` where four of the five were
+ *     this, so every newly-opened pull request was born with a red check.
+ *   * WORKFLOW SCOPE — a GitHub App cannot update a pull request that touches
+ *     `.github/workflows/**` unless its token carries `workflows`. That is a fact
+ *     about the token, permanent for as long as the pull request is open, and no
+ *     more resolvable by this action than a conflict is.
+ */
+const NOT_A_FAILURE: ReadonlyArray<readonly [RegExp, string]> = [
+	[/no new commits on the base branch/i, "already up to date"],
+	[/without `?workflows`? permission/i, "needs `workflows` token scope; update it by hand"],
+];
+
+function classify(message: string | undefined): string | undefined {
+	if (!message) return undefined;
+	return NOT_A_FAILURE.find(([re]) => re.test(message))?.[1];
 }
 
 /**
@@ -136,6 +166,12 @@ export default async function run(client: Octokit, context: typeof Context): Pro
 
 	results.sort((a, b) => a.pr.number - b.pr.number);
 
+	// The error the API already returned says why, for the outcomes that are not
+	// failures at all — see NOT_A_FAILURE.
+	for (const r of results) {
+		if (!r.ok) r.skipped = classify(r.message);
+	}
+
 	// A pull request whose head conflicts with the base cannot be updated by any
 	// caller: update-branch performs a merge, and a conflicted merge has no
 	// non-interactive resolution. That is a fact about the pull request — already
@@ -146,34 +182,34 @@ export default async function run(client: Octokit, context: typeof Context): Pro
 	// then keeps the run red forever, burying the breakage only this action can
 	// report (bad token, rate limit, 5xx).
 	//
-	// Only failures are re-queried — `mergeable_state` is absent from the list
-	// response — so the cost is bounded by the failure count, not the PR count. A
-	// lookup that itself fails leaves the result classified as a failure: unknown
-	// stays loud.
+	// Only STILL-UNEXPLAINED failures are re-queried — `mergeable_state` is absent
+	// from the list response — so the cost is bounded by that count, not the PR
+	// count. A lookup that itself fails leaves the result classified as a failure:
+	// unknown stays loud.
 	await Promise.all(
 		results
-			.filter((r) => !r.ok)
+			.filter((r) => !r.ok && !r.skipped)
 			.map(async (r) => {
 				try {
 					const { data } = await client.rest.pulls.get({ ...context.repo, pull_number: r.pr.number });
-					r.conflicted = data.mergeable_state === "dirty";
+					if (data.mergeable_state === "dirty") r.skipped = "conflicted; resolve on the pull request";
 				} catch {
-					r.conflicted = false;
+					/* unknown stays a failure */
 				}
 			}),
 	);
 
 	const passed = results.filter((r) => r.ok);
-	const conflicted = results.filter((r) => !r.ok && r.conflicted);
-	const failed = results.filter((r) => !r.ok && !r.conflicted);
+	const skipped = results.filter((r) => !r.ok && r.skipped);
+	const failed = results.filter((r) => !r.ok && !r.skipped);
 
 	for (const r of results) {
-		const status = r.ok ? "✅" : r.conflicted ? "⏭️" : "❌";
+		const status = r.ok ? "✅" : r.skipped ? "⏭️" : "❌";
 		const detail = r.message ? ` — ${r.message}` : "";
-		const suffix = r.conflicted ? " (conflicted; resolve on the pull request)" : "";
+		const suffix = r.skipped ? ` (${r.skipped})` : "";
 		core.info(`${status} ${describe(r.pr)}${detail}${suffix}`);
 	}
-	core.info(`Summary: ${passed.length} succeeded, ${conflicted.length} skipped as conflicted, ${failed.length} failed.`);
+	core.info(`Summary: ${passed.length} succeeded, ${skipped.length} skipped, ${failed.length} failed.`);
 
 	if (process.env.GITHUB_STEP_SUMMARY) {
 		await core.summary
@@ -181,16 +217,16 @@ export default async function run(client: Octokit, context: typeof Context): Pro
 			.addRaw(`Attempted ${results.length} update${results.length === 1 ? "" : "s"} against \`${baseBranch}\`.`)
 			.addList(
 				results.map((r) => {
-					const status = r.ok ? "✅" : r.conflicted ? "⏭️" : "❌";
+					const status = r.ok ? "✅" : r.skipped ? "⏭️" : "❌";
 					const detail = r.message ? ` — ${r.message}` : "";
 					return `${status} #${r.pr.number} ${r.pr.title}${detail}`;
 				}),
 			)
-			.addRaw(`\n**${passed.length}** succeeded · **${conflicted.length}** skipped as conflicted · **${failed.length}** failed`)
+			.addRaw(`\n**${passed.length}** succeeded · **${skipped.length}** skipped · **${failed.length}** failed`)
 			.write();
 	}
 
-	report(passed.length, failed.length, conflicted.length);
+	report(passed.length, failed.length, skipped.length);
 
 	if (failed.length > 0 && passed.length === 0) {
 		core.setFailed(`All ${failed.length} pull request updates failed.`);
